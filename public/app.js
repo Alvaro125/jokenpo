@@ -50,8 +50,6 @@ loginForm.addEventListener('submit', async (e) => {
             body: JSON.stringify({ username, password }),
         });
         const data = await res.json();
-        console.log(data)
-        console.log(res)
         if (res.ok && data.token) {
             localStorage.setItem('jwtToken', data.token);
             myUserId = data.userId;
@@ -74,8 +72,12 @@ loginForm.addEventListener('submit', async (e) => {
 
 // --- Funções WebSocket e Jogo ---
 function connectWebSocket(token) {
+    // Determina o protocolo WebSocket (ws ou wss) baseado no protocolo da página
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     // Certifique-se que o caminho /ws corresponde ao definido no server.on('upgrade')
-    socket = new WebSocket(`ws://${window.location.host}/ws?token=${token}`);
+    const wsUrl = `${wsProtocol}//${window.location.host}/ws?token=${token}`;
+    appendMessage(`Tentando conectar a: ${wsUrl}`); // Log para depuração
+    socket = new WebSocket(wsUrl);
 
     socket.onopen = () => {
         appendMessage('Conectado ao servidor WebSocket!');
@@ -88,8 +90,12 @@ function connectWebSocket(token) {
         handleServerMessage(message);
     };
 
-    socket.onclose = () => {
-        appendMessage('Desconectado do servidor WebSocket.');
+    socket.onclose = (event) => {
+        let reason = "";
+        if (event.code) reason += `Código: ${event.code}`;
+        if (event.reason) reason += ` Motivo: ${event.reason}`;
+        if (event.wasClean) reason += ` (Conexão limpa)`; else reason += ` (Conexão não limpa)`;
+        appendMessage(`Desconectado do servidor WebSocket. ${reason}`);
         gameControls.style.display = 'none';
         roomActions.style.display = 'none';
         gameArea.style.display = 'none';
@@ -100,7 +106,7 @@ function connectWebSocket(token) {
     };
 
     socket.onerror = (error) => {
-        appendMessage('Erro na conexão WebSocket.');
+        appendMessage('Erro na conexão WebSocket. Verifique o console do navegador para detalhes.');
         console.error('WebSocket Error:', error);
     };
 }
@@ -224,8 +230,9 @@ window.onload = () => {
         // Aqui, vamos simplificar e exigir novo login se a página for recarregada,
         // a menos que você implemente a recuperação de user info.
         // Se você armazenou userId e username no localStorage junto com o token:
-        const storedUserId = localStorage.getItem('userId');
-        const storedUsername = localStorage.getItem('username');
+        const storedUserId = localStorage.getItem('userId'); // Você precisaria salvar isso no login
+        const storedUsername = localStorage.getItem('username'); // Você precisaria salvar isso no login
+
         if (storedUserId && storedUsername) {
             myUserId = storedUserId;
             myUsername = storedUsername;
@@ -234,12 +241,16 @@ window.onload = () => {
             registerForm.style.display = 'none';
             playerInfoDiv.textContent = `Logado como: ${myUsername} (ID: ${myUserId})`;
             playerInfoDiv.style.display = 'block';
+            document.getElementById('logoutBtn').style.display = 'inline'; // Mostra botão de logout
             roomActions.style.display = 'block';
             connectWebSocket(token);
         } else {
             // Se não tem user info, força novo login para obter esses dados
             localStorage.removeItem('jwtToken'); // Limpa token possivelmente inválido ou incompleto
+            document.getElementById('logoutBtn').style.display = 'none'; // Garante que logout está escondido
         }
+    } else {
+         document.getElementById('logoutBtn').style.display = 'none'; // Garante que logout está escondido
     }
 };
 
