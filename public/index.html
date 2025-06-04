@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jokenpô JWT com Salas</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <h1>Jokenpô Multiplayer com Salas e JWT</h1>
+
+    <div id="playerInfo" style="display: none;"></div>
+    <button id="logoutBtn" style="display: none;">Logout</button>
+
+
+    <div id="authForms">
+        <form id="registerForm">
+            <h2>Registrar</h2>
+            <input type="text" name="username" placeholder="Usuário" required>
+            <input type="password" name="password" placeholder="Senha" required>
+            <button type="submit">Registrar</button>
+        </form>
+
+        <form id="loginForm">
+            <h2>Login</h2>
+            <input type="text" name="username" placeholder="Usuário" required>
+            <input type="password" name="password" placeholder="Senha" required>
+            <button type="submit">Login</button>
+        </form>
+    </div>
+
+    <div id="gameControls" style="display: none;">
+        <div id="roomActions">
+            <h2>Salas</h2>
+            <button id="createRoomBtn">Criar Sala</button>
+            <div>
+                <input type="text" id="roomCodeInput" placeholder="Código da Sala">
+                <button id="joinRoomBtn">Entrar na Sala</button>
+            </div>
+        </div>
+
+        <div id="roomInfo" style="display: none;"></div>
+
+        <div id="gameArea" style="display: none;">
+            <h3>Faça sua escolha:</h3>
+            <div id="choices">
+                <button id="rockBtn">Pedra ✊</button>
+                <button id="paperBtn">Papel ✋</button>
+                <button id="scissorsBtn">Tesoura ✌️</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="messagesContainer">
+        <h2>Mensagens do Jogo:</h2>
+        <div id="messages"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
