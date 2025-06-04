@@ -50,6 +50,8 @@ loginForm.addEventListener('submit', async (e) => {
             body: JSON.stringify({ username, password }),
         });
         const data = await res.json();
+        console.log(data)
+        console.log(res)
         if (res.ok && data.token) {
             localStorage.setItem('jwtToken', data.token);
             myUserId = data.userId;
