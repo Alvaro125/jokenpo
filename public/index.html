@@ -1,63 +1,176 @@
 <!DOCTYPE html>
-<html lang="pt-br">
+<html lang="pt-br" data-theme="light"> <!-- Default theme, can be changed -->
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Jokenpô JWT com Salas</title>
-    <link rel="stylesheet" href="style.css">
+    <title>Jokenpô JWT com Salas - DaisyUI</title>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@latest/dist/full.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // Optional: Configure Tailwind (e.g., custom fonts)
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'], // Example: Using Inter font
+                    },
+                },
+            },
+             // daisyUI config (optional)
+            daisyui: {
+                themes: ["light", "dark", "cupcake", "bumblebee", "emerald", "corporate", "synthwave", "retro", "cyberpunk", "valentine", "halloween", "garden", "forest", "aqua", "lofi", "pastel", "fantasy", "wireframe", "black", "luxury", "dracula", "cmyk", "autumn", "business", "acid", "lemonade", "night", "coffee", "winter"],
+            },
+        }
+    </script>
+    <style>
+        /* Custom scrollbar for messages, if desired */
+        #messages::-webkit-scrollbar {
+            width: 8px;
+        }
+        #messages::-webkit-scrollbar-track {
+            background: hsl(var(--b2) / var(--tw-bg-opacity,1)); /* Adjusted for DaisyUI base-200 */
+        }
+        #messages::-webkit-scrollbar-thumb {
+            background: hsl(var(--bc) / var(--tw-bg-opacity,1)); /* Adjusted for DaisyUI base-content */
+            border-radius: 4px;
+        }
+        #messages {
+            scrollbar-width: thin;
+            scrollbar-color: hsl(var(--bc) / var(--tw-bg-opacity,1)) hsl(var(--b2) / var(--tw-bg-opacity,1));
+        }
+    </style>
 </head>
 
-<body>
-    <h1>Jokenpô Multiplayer com Salas e JWT</h1>
+<body class="font-sans bg-base-200 text-base-content min-h-screen p-4 md:p-8 flex flex-col items-center">
+    <div class="container mx-auto max-w-3xl w-full">
+        <h1 class="text-4xl font-bold text-center mb-6 text-primary">Jokenpô Multiplayer</h1>
+        <div class="text-center mb-2">
+            <label class="label cursor-pointer inline-block">
+              <span class="label-text mr-2">Change Theme:</span>
+              <select id="themeSwitcher" class="select select-bordered select-sm">
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+                <option value="cupcake">Cupcake</option>
+                <option value="bumblebee">Bumblebee</option>
+                <option value="emerald">Emerald</option>
+                <option value="corporate">Corporate</option>
+                <option value="synthwave">Synthwave</option>
+                <option value="retro">Retro</option>
+                <option value="cyberpunk">Cyberpunk</option>
+                <option value="valentine">Valentine</option>
+                <option value="halloween">Halloween</option>
+                <option value="garden">Garden</option>
+                <option value="forest">Forest</option>
+                <option value="aqua">Aqua</option>
+                <option value="lofi">Lofi</option>
+                <option value="pastel">Pastel</option>
+                <option value="fantasy">Fantasy</option>
+                <option value="wireframe">Wireframe</option>
+                <option value="black">Black</option>
+                <option value="luxury">Luxury</option>
+                <option value="dracula">Dracula</option>
+                <option value="cmyk">CMYK</option>
+                <option value="autumn">Autumn</option>
+                <option value="business">Business</option>
+                <option value="acid">Acid</option>
+                <option value="lemonade">Lemonade</option>
+                <option value="night">Night</option>
+                <option value="coffee">Coffee</option>
+                <option value="winter">Winter</option>
+              </select>
+            </label>
+        </div>
 
-    <div id="playerInfo" style="display: none;"></div>
-    <button id="logoutBtn" style="display: none;">Logout</button>
 
-
-    <div id="authForms">
-        <form id="registerForm">
-            <h2>Registrar</h2>
-            <input type="text" name="username" placeholder="Usuário" required>
-            <input type="password" name="password" placeholder="Senha" required>
-            <button type="submit">Registrar</button>
-        </form>
-
-        <form id="loginForm">
-            <h2>Login</h2>
-            <input type="text" name="username" placeholder="Usuário" required>
-            <input type="password" name="password" placeholder="Senha" required>
-            <button type="submit">Login</button>
-        </form>
-    </div>
-
-    <div id="gameControls" style="display: none;">
-        <div id="roomActions">
-            <h2>Salas</h2>
-            <button id="createRoomBtn">Criar Sala</button>
-            <div>
-                <input type="text" id="roomCodeInput" placeholder="Código da Sala">
-                <button id="joinRoomBtn">Entrar na Sala</button>
+        <!-- Loading Overlay -->
+        <div id="loadingOverlay" class="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] hidden backdrop-blur-sm">
+            <div class="bg-base-100 p-8 rounded-lg shadow-xl flex flex-col items-center">
+                <span class="loading loading-spinner loading-lg text-primary mb-4"></span>
+                <p id="loadingMessage" class="text-lg text-base-content">Carregando...</p>
             </div>
         </div>
 
-        <div id="roomInfo" style="display: none;"></div>
+        <div id="playerInfoContainer" class="text-center mb-6 p-4 bg-base-100 rounded-lg shadow" style="display: none;">
+            <p id="playerInfo" class="text-lg font-semibold"></p>
+            <button id="logoutBtn" class="btn btn-sm btn-outline btn-error mt-2">Logout</button>
+        </div>
 
-        <div id="gameArea" style="display: none;">
-            <h3>Faça sua escolha:</h3>
-            <div id="choices">
-                <button id="rockBtn">Pedra ✊</button>
-                <button id="paperBtn">Papel ✋</button>
-                <button id="scissorsBtn">Tesoura ✌️</button>
+        <div id="authForms" class="grid md:grid-cols-2 gap-6 mb-8">
+            <form id="registerForm" class="card bg-base-100 shadow-xl p-6">
+                <h2 class="text-2xl font-semibold mb-4 card-title text-neutral-content bg-neutral p-3 rounded-t-lg -m-6 mb-4">Registrar</h2>
+                <div class="form-control">
+                    <label class="label"><span class="label-text">Usuário</span></label>
+                    <input type="text" name="username" placeholder="Seu nome de usuário" class="input input-bordered w-full" required>
+                </div>
+                <div class="form-control mt-4">
+                    <label class="label"><span class="label-text">Senha</span></label>
+                    <input type="password" name="password" placeholder="Sua senha" class="input input-bordered w-full" required>
+                </div>
+                <button type="submit" class="btn btn-primary mt-6 w-full">Registrar</button>
+            </form>
+
+            <form id="loginForm" class="card bg-base-100 shadow-xl p-6">
+                <h2 class="text-2xl font-semibold mb-4 card-title text-neutral-content bg-neutral p-3 rounded-t-lg -m-6 mb-4">Login</h2>
+                <div class="form-control">
+                    <label class="label"><span class="label-text">Usuário</span></label>
+                    <input type="text" name="username" placeholder="Seu nome de usuário" class="input input-bordered w-full" required>
+                </div>
+                <div class="form-control mt-4">
+                    <label class="label"><span class="label-text">Senha</span></label>
+                    <input type="password" name="password" placeholder="Sua senha" class="input input-bordered w-full" required>
+                </div>
+                <button type="submit" class="btn btn-accent mt-6 w-full">Login</button>
+            </form>
+        </div>
+
+        <div id="gameControls" class="card bg-base-100 shadow-xl p-6 mb-8" style="display: none;">
+            <div id="roomActions" class="mb-6">
+                <h2 class="text-2xl font-semibold mb-4 card-title">Salas de Jogo</h2>
+                <div class="flex flex-col sm:flex-row gap-4 items-center">
+                    <button id="createRoomBtn" class="btn btn-secondary flex-grow w-full sm:w-auto">Criar Nova Sala</button>
+                    <div class="form-control flex-grow w-full sm:w-auto">
+                         <label class="label"><span class="label-text">Ou entre em uma sala existente:</span></label>
+                        <div class="join w-full">
+                            <input type="text" id="roomCodeInput" placeholder="Código da Sala" class="input input-bordered join-item flex-grow" style="min-width: 120px;">
+                            <button id="joinRoomBtn" class="btn btn-success join-item">Entrar</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="roomInfo" class="alert shadow-lg" style="display: none;">
+                <!-- Icon will be set by JS -->
+                <div>
+                    <span id="roomInfoIcon">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-info shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    </span>
+                    <span id="roomInfoText" class="font-medium"></span>
+                </div>
+            </div>
+
+
+            <div id="gameArea" style="display: none;" class="text-center mt-6">
+                <h3 class="text-xl font-semibold mb-4">Faça sua escolha:</h3>
+                <div id="choices" class="flex justify-center gap-2 sm:gap-4 flex-wrap">
+                    <button id="rockBtn" class="btn btn-lg btn-outline basis-full sm:basis-auto mb-2 sm:mb-0">Pedra ✊</button>
+                    <button id="paperBtn" class="btn btn-lg btn-outline basis-full sm:basis-auto mb-2 sm:mb-0">Papel ✋</button>
+                    <button id="scissorsBtn" class="btn btn-lg btn-outline basis-full sm:basis-auto">Tesoura ✌️</button>
+                </div>
             </div>
         </div>
-    </div>
 
-    <div id="messagesContainer">
-        <h2>Mensagens do Jogo:</h2>
-        <div id="messages"></div>
+        <div id="messagesContainer" class="card bg-base-100 shadow-xl">
+             <h2 class="text-2xl font-semibold card-title text-neutral-content bg-neutral p-3 rounded-t-lg -m-px">Mensagens do Jogo:</h2>
+            <div id="messages" class="p-4 max-h-96 min-h-[100px] overflow-y-auto space-y-3">
+                <!-- Messages will be appended here -->
+                <div class="text-center text-base-content/60 p-4">Aguardando ações...</div>
+            </div>
+        </div>
+         <footer class="text-center mt-8 text-sm text-base-content/70">
+            <p>&copy; 2024 Jokenpô Multiplayer. Powered by DaisyUI.</p>
+        </footer>
     </div>
-
     <script src="app.js"></script>
 </body>
 
