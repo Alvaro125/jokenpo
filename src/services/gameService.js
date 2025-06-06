@@ -1,49 +1,55 @@
-// src/services/gameService.js
-// ... (código completo do gameService.js da iteração anterior com reconexão) ...
-// Pontos chave:
-// - `initializeGameService(wss)`: Configura o listener para novas conexões.
-// - `attemptPlayerReconnection(ws)`: Tenta recolocar um utilizador numa sala se ele se reconectar.
-// - `handleCreateRoom(ws)`: Cria uma nova sala de jogo.
-// - `handleJoinRoom(ws, roomCode)`: Permite que um utilizador entre numa sala existente.
-// - `handleMakeChoice(ws, roomCode, choice)`: Processa a jogada de um utilizador.
-// - `determineWinner(choice1, choice2)`: Lógica do Jokenpô.
-// - `handlePlayerDisconnect(ws)`: Lida com a desconexão de um utilizador.
-// O restante do código do gameService.js fornecido na última iteração do Canvas
-// com a lógica de reconexão e persistência de estado é aplicável aqui.
-// Cole o código completo do gameService.js aqui.
-// Por questões de brevidade neste exemplo formatado, ele não será repetido integralmente,
-// mas deve ser o mesmo da versão anterior que incluía a lógica de reconexão.
 const WebSocket = require('ws');
-const { v4: uuidv4 } = require('uuid');
-const db = require('../config/db');
-const User = require('../models/userModel');
-const Room = require('../models/roomModel');
+// const { v4: uuidv4 } = require('uuid'); // Not used in current logic
+const db = require('../config/db'); // Assuming your db config
+const User = require('../models/userModel'); // Assuming your User model
+const Room = require('../models/roomModel'); // Assuming your Room model
 
-const rooms = new Map(); // roomCode -> { id (DB room id), roomCode, players: Map<userId, ws>, choices: Map<userId, choice>, status, player1IdActual, player2IdActual, playerUsernames: Map<userId, username> }
+// In-memory store for active rooms
+// roomCode -> { 
+//   id (DB room id), 
+//   roomCode, 
+//   players: Map<userId, ws>, 
+//   choices: Map<userId, choice>, 
+//   status: 'waiting' | 'playing' | 'draw' | '<username>_won' | 'closed', 
+//   player1IdActual (creator/owner), 
+//   player2IdActual, 
+//   playerUsernames: Map<userId, username> 
+// }
+const rooms = new Map(); 
 
 async function attemptPlayerReconnection(ws) {
     console.log(`Tentando reconectar ${ws.clientUsername} (ID: ${ws.clientId})`);
     for (const [roomCode, room] of rooms) {
+        // Check if this player was one of the designated players (player1 or player2)
+        // and if they are not currently connected with this ws instance or not connected at all
         if ((room.player1IdActual === ws.clientId || room.player2IdActual === ws.clientId) &&
             (!room.players.has(ws.clientId) || room.players.get(ws.clientId) !== ws)) {
+            
             console.log(`${ws.clientUsername} pertence à sala ${roomCode}. Reconectando...`);
-            room.players.set(ws.clientId, ws);
-            room.playerUsernames.set(ws.clientId, ws.clientUsername);
+            room.players.set(ws.clientId, ws); // Update/set WebSocket connection
+            room.playerUsernames.set(ws.clientId, ws.clientUsername); // Ensure username is fresh
             ws.currentRoomCode = roomCode;
+
             const currentPlayersList = Array.from(room.playerUsernames.entries()).map(([id, name]) => ({ userId: id, username: name }));
+            
             const choicesForClient = {};
             room.choices.forEach((choice, userId) => {
                 choicesForClient[userId] = { choice: choice, username: room.playerUsernames.get(userId) };
             });
+
             const roomStatePayload = {
                 roomCode: room.roomCode,
-                roomId: room.id,
+                roomId: room.id, // DB room ID
                 players: currentPlayersList,
                 status: room.status,
                 choices: choicesForClient,
-                myChoice: room.choices.get(ws.clientId) || null
+                myChoice: room.choices.get(ws.clientId) || null,
+                ownerId: room.player1IdActual // Send owner ID
             };
+
             ws.send(JSON.stringify({ type: 'ROOM_STATE_UPDATE', payload: roomStatePayload }));
+
+            // Notify the other player if they are connected
             const otherPlayerId = room.player1IdActual === ws.clientId ? room.player2IdActual : room.player1IdActual;
             if (otherPlayerId && room.players.has(otherPlayerId)) {
                 const otherPlayerWs = room.players.get(otherPlayerId);
@@ -54,25 +60,30 @@ async function attemptPlayerReconnection(ws) {
                     }));
                 }
             }
-            return true;
+            return true; // Reconnection successful
         }
     }
     console.log(`${ws.clientUsername} não encontrado em nenhuma sala ativa para reconexão.`);
-    return false;
+    return false; // No suitable room found for reconnection
 }
 
 
 function initializeGameService(wss) {
     wss.on('connection', async (ws) => {
+        // ws.clientId and ws.clientUsername are set by the authentication middleware
         console.log(`Cliente autenticado conectado: ${ws.clientUsername} (ID: ${ws.clientId})`);
+
         const reconnected = await attemptPlayerReconnection(ws);
         if (!reconnected) {
+            // If not reconnected to an existing game, send a welcome message.
             ws.send(JSON.stringify({ type: 'WELCOME_NEW_CONNECTION', payload: { message: 'Bem-vindo! Crie ou entre numa sala.' } }));
         }
+
         ws.on('message', (message) => {
             try {
                 const data = JSON.parse(message);
                 console.log(`Mensagem recebida de ${ws.clientUsername} (Sala: ${ws.currentRoomCode || 'N/A'}):`, data);
+
                 switch (data.type) {
                     case 'CREATE_ROOM':
                         handleCreateRoom(ws);
@@ -83,6 +94,9 @@ function initializeGameService(wss) {
                     case 'MAKE_CHOICE':
                         handleMakeChoice(ws, data.payload.roomCode || ws.currentRoomCode, data.payload.choice);
                         break;
+                    case 'CLOSE_ROOM': // Added handler for CLOSE_ROOM
+                        handleCloseRoom(ws, data.payload.roomCode || ws.currentRoomCode);
+                        break;
                     default:
                         ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Tipo de mensagem desconhecido.' } }));
                 }
@@ -91,13 +105,15 @@ function initializeGameService(wss) {
                 ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Mensagem inválida.' } }));
             }
         });
+
         ws.on('close', () => {
             console.log(`Cliente desconectado: ${ws.clientUsername} (ID: ${ws.clientId})`);
             handlePlayerDisconnect(ws);
         });
         ws.on('error', (error) => {
             console.error(`Erro no WebSocket para ${ws.clientUsername}:`, error);
-            handlePlayerDisconnect(ws);
+            // Optionally handle disconnect here too if error implies connection loss
+            handlePlayerDisconnect(ws); 
         });
     });
 }
@@ -105,147 +121,175 @@ function initializeGameService(wss) {
 async function handleCreateRoom(ws) {
     let roomCode;
     let roomExistsInDb = true;
-    while (roomExistsInDb) {
+    let attempts = 0;
+    const maxAttempts = 10; // Prevent infinite loop
+
+    // Generate a unique room code
+    while (roomExistsInDb && attempts < maxAttempts) {
         roomCode = Math.random().toString(36).substring(2, 7).toUpperCase(); // 5 chars
-        const rows = await Room.findByRoomCode(roomCode);
-        console.log(rows)
-        if (!rows) roomExistsInDb = false;
+        const existingRoom = await Room.findByRoomCode(roomCode); // findByRoomCode should return the room or null/undefined
+        if (!existingRoom) { // If no room found with this code
+            roomExistsInDb = false;
+        }
+        attempts++;
     }
+    if (roomExistsInDb) { // Failed to generate unique code
+         ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Erro ao gerar código de sala único. Tente novamente.' } }));
+         return;
+    }
+
     try {
-        const dbRoom = await Room.create(roomCode, ws.clientId, 'waiting');
-        const newRoomData = dbRoom;
+        // Create room in the database
+        const dbRoom = await Room.create(roomCode, ws.clientId, 'waiting'); // ws.clientId is player1_id
+        if (!dbRoom || !dbRoom.id) {
+            throw new Error("Falha ao criar sala no banco de dados ou retornar ID.");
+        }
+
         const newRoom = {
-            id: newRoomData.id,
+            id: dbRoom.id, // Database ID of the room
             roomCode: roomCode,
-            players: new Map(),
-            choices: new Map(),
-            status: newRoomData.status,
-            player1IdActual: ws.clientId,
+            players: new Map(), // Map of userId -> WebSocket connection
+            choices: new Map(), // Map of userId -> choice ('rock', 'paper', 'scissors')
+            status: 'waiting', // Initial status
+            player1IdActual: ws.clientId, // The creator is player1 (and owner)
             player2IdActual: null,
-            playerUsernames: new Map()
+            playerUsernames: new Map() // Map of userId -> username
         };
         newRoom.players.set(ws.clientId, ws);
         newRoom.playerUsernames.set(ws.clientId, ws.clientUsername);
-        rooms.set(roomCode, newRoom);
-        ws.currentRoomCode = roomCode;
+        rooms.set(roomCode, newRoom); // Add to in-memory store
+
+        ws.currentRoomCode = roomCode; // Assign room code to WebSocket connection
+
         ws.send(JSON.stringify({
             type: 'ROOM_CREATED',
-            payload: { roomCode, roomId: newRoom.id, players: [{ userId: ws.clientId, username: ws.clientUsername }], status: newRoom.status }
+            payload: { 
+                roomCode, 
+                roomId: newRoom.id, 
+                players: [{ userId: ws.clientId, username: ws.clientUsername }], 
+                status: newRoom.status,
+                ownerId: ws.clientId // Creator is the owner
+            }
         }));
-        console.log(`Sala ${roomCode} criada por ${ws.clientUsername}. Status: ${newRoom.status}`);
+        console.log(`Sala ${roomCode} criada por ${ws.clientUsername}. ID BD: ${newRoom.id}. Status: ${newRoom.status}`);
     } catch (error) {
         console.error("Erro ao criar sala na BD:", error);
-        ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Erro ao criar sala.' } }));
+        ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Erro de servidor ao criar sala.' } }));
     }
 }
 
 async function handleJoinRoom(ws, roomCode) {
-    const room = rooms.get(roomCode);
+    let room = rooms.get(roomCode);
+
+    // If room is not in memory, try to load from DB (e.g., server restart or player joining an existing persisted room)
     if (!room) {
         try {
-            const { rows } = await Room.findByRoomCode(roomCode);
-            if (rows.length > 0) {
-                const dbRoom = rows[0];
-                if (dbRoom.player1_id && dbRoom.player2_id && dbRoom.player1_id !== ws.clientId && dbRoom.player2_id !== ws.clientId) {
+            const dbRoomData = await Room.findByRoomCode(roomCode);
+            if (dbRoomData) { // dbRoomData is the room object from DB
+                if (dbRoomData.status === 'closed') {
+                     ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Esta sala foi fechada.' } })); return;
+                }
+                // Check if player is already one of the assigned players for this room (reconnecting scenario)
+                if (dbRoomData.player1_id === ws.clientId || dbRoomData.player2_id === ws.clientId) {
+                    if (await attemptPlayerReconnection(ws)) return; // Attempt reconnection first
+                }
+
+                // If room is full in DB and current player is not one of them
+                if (dbRoomData.player1_id && dbRoomData.player2_id && 
+                    dbRoomData.player1_id !== ws.clientId && dbRoomData.player2_id !== ws.clientId) {
                     ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Sala cheia (DB).' } })); return;
                 }
-                if (dbRoom.player1_id === ws.clientId || dbRoom.player2_id === ws.clientId) {
-                    if (await attemptPlayerReconnection(ws)) return;
+
+                // Load room into memory
+                room = {
+                    id: dbRoomData.id,
+                    roomCode: dbRoomData.room_code,
+                    players: new Map(),
+                    choices: new Map(), // Choices are typically transient for a round
+                    status: dbRoomData.status,
+                    player1IdActual: dbRoomData.player1_id,
+                    player2IdActual: dbRoomData.player2_id,
+                    playerUsernames: new Map()
+                };
+                // Load usernames for existing players
+                if (room.player1IdActual) {
+                    const p1User = await User.findById(room.player1IdActual);
+                    if (p1User) room.playerUsernames.set(room.player1IdActual, p1User.username);
                 }
-                let joiningRoom = rooms.get(roomCode);
-                if (!joiningRoom) {
-                    const player1User = dbRoom.player1_id ? await User.findById(dbRoom.player1_id) : null;
-                    joiningRoom = {
-                        id: dbRoom.id,
-                        roomCode: dbRoom.room_code,
-                        players: new Map(),
-                        choices: new Map(),
-                        status: dbRoom.status,
-                        player1IdActual: dbRoom.player1_id,
-                        player2IdActual: dbRoom.player2_id,
-                        playerUsernames: new Map()
-                    };
-                    if (player1User) joiningRoom.playerUsernames.set(player1User.id, player1User.username);
-                    rooms.set(roomCode, joiningRoom);
+                if (room.player2IdActual) { // This might be null if only player1 has joined
+                    const p2User = await User.findById(room.player2IdActual);
+                    if (p2User) room.playerUsernames.set(room.player2IdActual, p2User.username);
                 }
-                const currentRoomInMemory = rooms.get(roomCode);
-                if (!currentRoomInMemory) {
-                    ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Erro ao carregar sala para entrar.' } })); return;
-                }
-                if (currentRoomInMemory.players.size >= 2 && !currentRoomInMemory.players.has(ws.clientId)) {
-                    ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Sala cheia (memória).' } })); return;
-                }
-                if (currentRoomInMemory.players.has(ws.clientId)) {
-                    ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Você já está nesta sala.' } })); return;
-                }
-                let newStatus = currentRoomInMemory.status;
-                if (!currentRoomInMemory.player1IdActual) {
-                    await Room.updatePlayer1(roomCode, ws.clientId);
-                    currentRoomInMemory.player1IdActual = ws.clientId;
-                } else if (!currentRoomInMemory.player2IdActual) {
-                    await Room.addPlayer2AndSetStatus(roomCode, ws.clientId, 'playing');
-                    currentRoomInMemory.player2IdActual = ws.clientId; newStatus = 'playing';
-                } else {
-                    ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Sala cheia ou erro inesperado ao entrar.' } })); return;
-                }
-                currentRoomInMemory.players.set(ws.clientId, ws);
-                currentRoomInMemory.playerUsernames.set(ws.clientId, ws.clientUsername);
-                currentRoomInMemory.status = newStatus; ws.currentRoomCode = roomCode;
-                const playersList = Array.from(currentRoomInMemory.playerUsernames.entries()).map(([id, name]) => ({ userId: id, username: name }));
-                currentRoomInMemory.players.forEach(playerWs_in_room => {
-                    playerWs_in_room.send(JSON.stringify({ type: 'PLAYER_JOINED', payload: { roomCode, players: playersList, status: currentRoomInMemory.status } }));
-                    if (currentRoomInMemory.status === 'playing' && currentRoomInMemory.players.size === 2) {
-                        playerWs_in_room.send(JSON.stringify({ type: 'GAME_START', payload: { roomCode, message: 'Ambos os jogadores estão conectados. Façam as vossas jogadas!' } }));
-                    }
-                });
-                console.log(`${ws.clientUsername} entrou na sala ${roomCode}. Jogadores: ${playersList.map(p => p.username).join(', ')}. Status: ${currentRoomInMemory.status}`);
-                return;
+                rooms.set(roomCode, room);
+                console.log(`Sala ${roomCode} carregada da BD para a memória.`);
             } else {
-                ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Sala não encontrada (DB).' } })); return;
+                ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Sala não encontrada.' } })); return;
             }
         } catch (dbError) {
             console.error("Erro ao tentar carregar/entrar na sala via DB:", dbError);
             ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Erro de servidor ao entrar na sala.' } })); return;
         }
     }
-
-    if (room.players.size >= 2 && !room.players.has(ws.clientId)) {
-        ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Sala cheia (memória).' } })); return;
+     if (room.status === 'closed') {
+        ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Esta sala foi fechada.' } })); return;
     }
+
+    // At this point, 'room' refers to the in-memory representation
     if (room.players.has(ws.clientId)) {
         ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Você já está nesta sala.' } })); return;
     }
+
+    if (room.players.size >= 2) { // Max 2 players
+        ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Sala cheia.' } })); return;
+    }
+
     try {
-        let newDbStatus = room.status;
-        if (!room.player1IdActual) {
-            await Room.updatePlayer1(room.id, ws.clientId);
+        let newStatus = room.status;
+        if (!room.player1IdActual) { // Should not happen if created correctly, but as a fallback
+            await Room.updatePlayer1(room.id, ws.clientId); // room.id is DB id
             room.player1IdActual = ws.clientId;
         } else if (!room.player2IdActual) {
-            newDbStatus = 'playing';
-            await Room.addPlayer2AndSetStatus(room.id, ws.clientId, newDbStatus);
+            await Room.addPlayer2AndSetStatus(room.id, ws.clientId, 'playing');
             room.player2IdActual = ws.clientId;
-        } else {
-            ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Erro: Slots da sala já preenchidos na BD.' } })); return;
-        }
+            newStatus = 'playing';
+        } // No else, because we checked for room.players.size >= 2 earlier
+
         room.players.set(ws.clientId, ws);
         room.playerUsernames.set(ws.clientId, ws.clientUsername);
-        room.status = newDbStatus; ws.currentRoomCode = roomCode;
+        room.status = newStatus;
+        ws.currentRoomCode = roomCode;
+
         const playersList = Array.from(room.playerUsernames.entries()).map(([id, name]) => ({ userId: id, username: name }));
-        room.players.forEach(playerWs_in_room => {
-            playerWs_in_room.send(JSON.stringify({ type: 'PLAYER_JOINED', payload: { roomCode, players: playersList, status: room.status } }));
-            if (room.status === 'playing' && room.players.size === 2) {
-                playerWs_in_room.send(JSON.stringify({ type: 'GAME_START', payload: { roomCode, message: 'Ambos os jogadores estão conectados. Façam as vossas jogadas!' } }));
+        
+        const joinedPayload = { 
+            roomCode, 
+            roomId: room.id,
+            players: playersList, 
+            status: room.status,
+            ownerId: room.player1IdActual // Owner is player1
+        };
+
+        // Notify all players in the room about the new joiner and potential game start
+        room.players.forEach(playerWsInRoom => {
+            if (playerWsInRoom.readyState === WebSocket.OPEN) {
+                playerWsInRoom.send(JSON.stringify({ type: 'PLAYER_JOINED', payload: joinedPayload }));
+                if (room.status === 'playing' && room.players.size === 2) {
+                    playerWsInRoom.send(JSON.stringify({ type: 'GAME_START', payload: { ...joinedPayload, message: 'Ambos os jogadores estão conectados. Façam as vossas jogadas!' } }));
+                }
             }
         });
-        console.log(`${ws.clientUsername} entrou na sala ${roomCode} (memória). Jogadores: ${playersList.map(p => p.username).join(', ')}. Status: ${room.status}`);
+        console.log(`${ws.clientUsername} entrou na sala ${roomCode}. Jogadores: ${playersList.map(p => p.username).join(', ')}. Status: ${room.status}`);
     } catch (error) {
-        console.error("Erro ao atualizar sala na BD (join em sala em memória):", error);
-        ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Erro ao entrar na sala.' } }));
+        console.error("Erro ao atualizar sala na BD (join):", error);
+        // Potentially remove player from in-memory if DB update failed critically
+        room.players.delete(ws.clientId);
+        room.playerUsernames.delete(ws.clientId);
+        ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Erro de servidor ao entrar na sala.' } }));
     }
 }
 
 
-function handleMakeChoice(ws, roomCode, choice) {
+async function handleMakeChoice(ws, roomCode, choice) {
     if (!roomCode) {
         ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Código da sala não especificado.' } })); return;
     }
@@ -254,7 +298,7 @@ function handleMakeChoice(ws, roomCode, choice) {
         ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Você não está nesta sala ou a sala não existe.' } })); return;
     }
     if (room.status !== 'playing') {
-        ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'O jogo não está em andamento.' } })); return;
+        ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'O jogo não está em andamento ou aguardando jogadores.' } })); return;
     }
     if (!['rock', 'paper', 'scissors'].includes(choice)) {
         ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Jogada inválida.' } })); return;
@@ -262,91 +306,200 @@ function handleMakeChoice(ws, roomCode, choice) {
     if (room.choices.has(ws.clientId)) {
         ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Você já fez a sua jogada nesta rodada.' } })); return;
     }
+
     room.choices.set(ws.clientId, choice);
-    ws.send(JSON.stringify({ type: 'CHOICE_MADE', payload: { choice: choice, message: 'A sua jogada foi registada. Aguardando oponente...' } }));
+    ws.send(JSON.stringify({ type: 'CHOICE_MADE', payload: { choice: choice, roomCode: roomCode, message: 'A sua jogada foi registada. Aguardando oponente...' } }));
     console.log(`${ws.clientUsername} na sala ${roomCode} escolheu ${choice}`);
+
+    // Notify opponent
     room.players.forEach(playerWsInRoom => {
         if (playerWsInRoom.clientId !== ws.clientId && playerWsInRoom.readyState === WebSocket.OPEN) {
-            playerWsInRoom.send(JSON.stringify({ type: 'OPPONENT_CHOICE_MADE', payload: { message: 'O seu oponente fez uma jogada.' } }));
+            playerWsInRoom.send(JSON.stringify({ type: 'OPPONENT_CHOICE_MADE', payload: { roomCode: roomCode, message: 'O seu oponente fez uma jogada.' } }));
         }
     });
+
+    // Check if both players have made their choices
     if (room.choices.size === 2 && room.players.size === 2) {
         const player1Id = room.player1IdActual;
         const player2Id = room.player2IdActual;
+
+        // Ensure the choices are from the designated player1 and player2
         if (!room.choices.has(player1Id) || !room.choices.has(player2Id)) {
-            console.log(`Sala ${roomCode}: Esperando escolhas dos jogadores designados.`); return;
+            console.log(`Sala ${roomCode}: Esperando escolhas dos jogadores designados (P1: ${player1Id}, P2: ${player2Id}). Escolhas atuais:`, room.choices);
+            // This case might indicate an issue if choices.size is 2 but not from player1Id and player2Id.
+            // However, with current logic, this should be fine as long as player1Id and player2Id are in room.players.
+            return; 
         }
+
         const choice1 = room.choices.get(player1Id);
         const choice2 = room.choices.get(player2Id);
         const result = determineWinner(choice1, choice2);
-        let gameStatus, winnerId = null;
+
+        let gameStatus, winnerId = null, winnerUsername = null;
         if (result === 'draw') {
             gameStatus = 'draw';
-        } else if (result === 'player1') {
-            gameStatus = `${room.playerUsernames.get(player1Id)}_won`; winnerId = player1Id;
-        } else {
-            gameStatus = `${room.playerUsernames.get(player2Id)}_won`; winnerId = player2Id;
+        } else if (result === 'player1') { // player1 (creator) won
+            winnerId = player1Id;
+            winnerUsername = room.playerUsernames.get(player1Id);
+            gameStatus = `${winnerUsername}_won`;
+        } else { // player2 won
+            winnerId = player2Id;
+            winnerUsername = room.playerUsernames.get(player2Id);
+            gameStatus = `${winnerUsername}_won`;
         }
-        room.status = gameStatus;
-        Room.updateStatus(roomCode, gameStatus)
+        
+        room.status = gameStatus; // Update in-memory status for the round result
+        // Storing round result in DB is optional, main room status 'playing' or 'closed' is more critical for persistence.
+        // await Room.updateStatus(room.id, gameStatus); // This would log each round result as room status
+
         const resultPayload = {
             roomCode,
-            choices: {
+            roomId: room.id,
+            choices: { // Send choices with usernames
                 [player1Id]: { username: room.playerUsernames.get(player1Id), choice: choice1 },
                 [player2Id]: { username: room.playerUsernames.get(player2Id), choice: choice2 }
             },
-            result: gameStatus, winnerId: winnerId, winnerUsername: winnerId ? room.playerUsernames.get(winnerId) : null
+            result: gameStatus, 
+            winnerId: winnerId, 
+            winnerUsername: winnerUsername,
+            ownerId: room.player1IdActual // Include ownerId
         };
+
         room.players.forEach(playerWsInRoom => {
             if (playerWsInRoom.readyState === WebSocket.OPEN) {
                 playerWsInRoom.send(JSON.stringify({ type: 'GAME_RESULT', payload: resultPayload }));
             }
         });
         console.log(`Resultado da sala ${roomCode}: ${gameStatus}. Jogadas: ${room.playerUsernames.get(player1Id)}(${choice1}) vs ${room.playerUsernames.get(player2Id)}(${choice2})`);
-        room.choices.clear(); room.status = 'playing';
-        setTimeout(() => {
-            room.players.forEach(pWs => {
-                if (pWs.readyState === WebSocket.OPEN) {
-                    pWs.send(JSON.stringify({ type: 'NEW_ROUND', payload: { message: "Nova rodada! Façam as vossas escolhas." } }));
-                }
-            });
-        }, 1000);
+
+        // Prepare for next round
+        room.choices.clear();
+        room.status = 'playing'; // Reset status for the next round immediately
+
+        setTimeout(async () => {
+            // Ensure room still exists and is 'playing'
+             const currentRoomForNextRound = rooms.get(roomCode);
+             if (currentRoomForNextRound && currentRoomForNextRound.status === 'playing') {
+                await Room.updateStatus(currentRoomForNextRound.id, 'playing').catch(err => console.error("Error updating room status to playing for new round:", err)); // Persist 'playing' status
+                currentRoomForNextRound.players.forEach(pWs => {
+                    if (pWs.readyState === WebSocket.OPEN) {
+                        pWs.send(JSON.stringify({ type: 'NEW_ROUND', payload: { roomCode, message: "Nova rodada! Façam as vossas escolhas.", ownerId: currentRoomForNextRound.player1IdActual } }));
+                    }
+                });
+             }
+        }, 2000); // Delay before starting new round message
     }
 }
 
 function determineWinner(choice1, choice2) {
     if (choice1 === choice2) return 'draw';
-    if ((choice1 === 'rock' && choice2 === 'scissors') || (choice1 === 'scissors' && choice2 === 'paper') || (choice1 === 'paper' && choice2 === 'rock')) {
-        return 'player1';
+    if (
+        (choice1 === 'rock' && choice2 === 'scissors') ||
+        (choice1 === 'scissors' && choice2 === 'paper') ||
+        (choice1 === 'paper' && choice2 === 'rock')
+    ) {
+        return 'player1'; // Corresponds to player1IdActual
     }
-    return 'player2';
+    return 'player2'; // Corresponds to player2IdActual
 }
+
+async function handleCloseRoom(ws, roomCode) {
+    if (!roomCode) {
+        ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Código da sala não especificado.' } })); return;
+    }
+    const room = rooms.get(roomCode);
+    if (!room) {
+        ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Sala não encontrada para fechar.' } })); return;
+    }
+
+    // Only the creator (player1IdActual) can close the room
+    if (room.player1IdActual !== ws.clientId) {
+        ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Você não é o proprietário da sala e não pode fechá-la.' } })); return;
+    }
+
+    try {
+        // Notify all players in the room that it's closing
+        const closeMessagePayload = { 
+            roomCode, 
+            message: `A sala ${roomCode} foi fechada pelo proprietário (${ws.clientUsername}).` 
+        };
+        room.players.forEach(playerWsInRoom => {
+            if (playerWsInRoom.readyState === WebSocket.OPEN) {
+                playerWsInRoom.send(JSON.stringify({ type: 'ROOM_CLOSED', payload: closeMessagePayload }));
+            }
+            playerWsInRoom.currentRoomCode = null; // Clear current room for all clients
+        });
+
+        // Update room status in DB to 'closed'
+        await Room.updateStatus(room.id, 'closed'); // room.id is the DB ID
+        
+        // Remove room from in-memory store
+        rooms.delete(roomCode);
+        console.log(`Sala ${roomCode} (ID BD: ${room.id}) fechada por ${ws.clientUsername}. Status atualizado para 'closed' na BD.`);
+
+    } catch (error) {
+        console.error(`Erro ao fechar sala ${roomCode} (ID BD: ${room.id}) ou atualizar BD:`, error);
+        // Send error to owner, other players might have already received ROOM_CLOSED or will disconnect
+        ws.send(JSON.stringify({ type: 'ERROR', payload: { message: 'Erro de servidor ao fechar a sala.' } }));
+    }
+}
+
 
 function handlePlayerDisconnect(ws) {
     const roomCode = ws.currentRoomCode;
     if (roomCode && rooms.has(roomCode)) {
         const room = rooms.get(roomCode);
-        const wasPlayerInRoom = room.players.has(ws.clientId);
-        room.players.delete(ws.clientId);
-        if (wasPlayerInRoom) {
+        const wasPlayerConnected = room.players.delete(ws.clientId); // Remove player's WebSocket connection
+
+        if (wasPlayerConnected) {
+            // room.playerUsernames.delete(ws.clientId); // Optionally keep username for logs or history, but remove active player
+
             console.log(`${ws.clientUsername} (ID: ${ws.clientId}) desconectado da sala ${roomCode}. Jogadores ativos restantes na sala: ${room.players.size}`);
+
+            // If the disconnected player was player1IdActual or player2IdActual, and the room is not yet closed by owner.
+            // For now, we don't automatically close the room if owner disconnects, owner can reconnect.
+            // If an opponent disconnects, the remaining player is notified.
+
             const otherPlayerId = room.player1IdActual === ws.clientId ? room.player2IdActual : room.player1IdActual;
-            if (otherPlayerId && room.players.has(otherPlayerId)) {
-                const otherPlayerWs = room.players.get(otherPlayerId);
-                if (otherPlayerWs && otherPlayerWs.readyState === WebSocket.OPEN) {
-                    otherPlayerWs.send(JSON.stringify({
-                        type: 'OPPONENT_DISCONNECTED',
-                        payload: { userId: ws.clientId, username: ws.clientUsername, message: `${ws.clientUsername} desconectou-se.` }
-                    }));
+            
+            // If this disconnected player was one of the two main players
+            if(ws.clientId === room.player1IdActual || ws.clientId === room.player2IdActual) {
+                // Notify the other main player if they are still connected
+                if (otherPlayerId && room.players.has(otherPlayerId)) {
+                    const otherPlayerWs = room.players.get(otherPlayerId);
+                    if (otherPlayerWs && otherPlayerWs.readyState === WebSocket.OPEN) {
+                        otherPlayerWs.send(JSON.stringify({
+                            type: 'OPPONENT_DISCONNECTED',
+                            payload: { 
+                                userId: ws.clientId, 
+                                username: ws.clientUsername, 
+                                roomCode: roomCode,
+                                message: `${ws.clientUsername} desconectou-se. Aguardando reconexão ou novas ações.` 
+                            }
+                        }));
+                        // Optionally, change room status to 'waiting' if game cannot proceed
+                        // if (room.status === 'playing' && room.players.size < 2) {
+                        // room.status = 'waiting';
+                        // Room.updateStatus(room.id, 'waiting');
+                        // otherPlayerWs.send(JSON.stringify({ type: 'ROOM_STATE_UPDATE', payload: { ...room, status: 'waiting', players: Array.from(room.playerUsernames.values()).map(name => ({username: name}))}}));
+                        // }
+                    }
                 }
             }
+
+
+            // If no active WebSocket connections remain, but the room might still exist in DB (e.g. waiting for reconnections)
+            // We don't delete from 'rooms' map here unless explicitly closed by owner,
+            // to allow for reconnections to persisted player slots.
             if (room.players.size === 0) {
-                console.log(`Sala ${roomCode} está agora vazia de conexões ativas.`);
+                console.log(`Sala ${roomCode} (ID BD: ${room.id}) está agora sem conexões WebSocket ativas. Jogadores designados: P1=${room.player1IdActual}, P2=${room.player2IdActual}.`);
+                // rooms.delete(roomCode); // Consider if room should be removed from memory if both disconnect and don't return soon.
+                                      // For now, rely on attemptPlayerReconnection using DB data.
             }
         }
     } else {
-        console.log(`${ws.clientUsername} (ID: ${ws.clientId}) desconectado, mas não estava associado a uma sala ativa na memória.`);
+        console.log(`${ws.clientUsername} (ID: ${ws.clientId}) desconectado, mas não estava associado a uma sala ativa na memória via ws.currentRoomCode.`);
     }
 }
-module.exports = { initializeGameService };
 
+module.exports = { initializeGameService };
